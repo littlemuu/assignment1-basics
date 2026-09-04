@@ -116,11 +116,11 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
             for new_pair in set(new_pairs):
                 pair_to_token_ids.setdefault(new_pair,set()).add(token_id)
 
-            for pair in touched_pairs:
-                if pair_counts[pair]==0:
-                    del pair_counts[pair]
-                elif pair_counts[pair]<0:
-                    raise RuntimeError(f"pair count became negative:{pair}")
+        for pair in touched_pairs:
+            if pair_counts[pair]==0:
+                del pair_counts[pair]
+            elif pair_counts[pair]<0:
+                raise RuntimeError(f"pair count became negative:{pair}")
         
         new_token=best_pair[0]+best_pair[1]
         vocab[len(vocab)]=new_token
