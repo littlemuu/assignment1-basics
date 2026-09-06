@@ -129,9 +129,12 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
               )->tuple[dict[int,bytes],list[Pair]]:
 
     num_processes=8
-    boundaries=find_chunk_boundaries(input_path,num_processes,b"<|endoftext|>")
+
     pretokenization_start=time.perf_counter()
+
+    boundaries=find_chunk_boundaries(input_path,num_processes,b"<|endoftext|>")
     pretoken_counts=parallel_count_pretokens(input_path,boundaries,special_tokens,num_processes)
+
     pretokenization_end=time.perf_counter()
 
     BPE_build_merge_start=time.perf_counter()
