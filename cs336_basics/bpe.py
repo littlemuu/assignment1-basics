@@ -34,6 +34,67 @@ def count_pretokens(text:str,special_tokens:list[str])->dict[Token,int]:
             counts[byte_tokens]+=1
     return dict(counts)
 
+def count_chunk(input_path,start:int,end:int,special_tokens:list[str]):
+    with open(input_path,"rb") as file:
+        #文件指针移动到start
+        file.seek(start)
+        chunk_bytes=file.read(end-start)
+    chunk_text=chunk_bytes.decode("utf-8")
+    return count_pretokens(chunk_text,special_tokens)
+
+def find_chunk_boundaries(input_path,num_processes:int,special_token:bytes
+                          )->list[int]:
+    
+    with open(input_path,"rb") as file:
+        file.seek(0,os.SEEK_END) #seek(offset,whence)
+        file_size=file.tell() #返回指针位置
+        file.seek(0)
+
+        #理论边界
+        boundaries=[
+            file_size*i//num_processes
+            for i in range(num_processes+1)
+        ]
+
+        mini_chunk_size=4096
+
+        for bi in range(1,len(boundaries)-1):
+            initial_position=boundaries[bi]
+            file.seek(initial_position)
+
+            while True:
+                mini_chunk=file.read(mini_chunk_size)
+
+                if mini_chunk==b"":
+                    boundaries[bi]=file_size
+                    break
+
+                found_at=mini_chunk.find(special_token)
+                if found_at!=-1:
+                    boundaries[bi]=initial_position+found_at
+                    break
+                initial_position+=mini_chunk_size
+
+    return sorted(set(boundaries))
+
+
+def parallel_count_pretokens(input_path,boundaries:list[int],special_tokens,num_processes
+                             )->Counter[Token]:
+    #对 Counter 来说，update() 的含义是加上计数，不是普通 dict.update() 那种直接覆盖。
+    tasks=[
+        (input_path,start,end,special_tokens)
+        for start,end in zip(boundaries[:-1],boundaries[1:])
+    ]
+
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        results=pool.starmap(count_chunk,tasks)
+
+    total_counts=Counter()
+    for counts in results:
+        total_counts.update(counts)
+
+    return total_counts
+         
 
 def build_pair_data(sequences:list[Token],frequencies:list[int]
                     )->dict[Counter[Pair,dict[Pair,set[int]]]]:
@@ -65,11 +126,11 @@ def merge_pair(token:Token,pair:Pair)->Token:
 
 def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
               )->tuple[dict[int,bytes],list[Pair]]:
-    
-    with open(input_path,"r",encoding="utf-8") as file:
-        text=file.read()
 
-    pretoken_counts=count_pretokens(text,special_tokens)
+    num_processes=8
+    boundaries=find_chunk_boundaries(input_path,num_processes,b"<|endoftext|>")
+    pretoken_counts=parallel_count_pretokens(input_path,boundaries,special_tokens,num_processes)
+
     sequences:list[Token]=list(pretoken_counts.keys())
     frequencies:list[int]=list(pretoken_counts.values())
 
@@ -127,89 +188,3 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
         merges.append(best_pair)
 
     return vocab,merges
-
-'''
-#初版，speed不通过
-
-#处理special token的核心原则是：它是不可拆分的边界，不参与BPE pair统计，也不能在它两侧形成pair。
-def remove_special(text:str,special_tokens:list[str])->list[str]:
-    if special_tokens:
-        special_pattern="|".join(re.escape(token)
-                                 for token in sorted(special_tokens,key=len,reverse=True,)
-                                 )
-        chunks=re.split(special_pattern,text,)
-    else:
-        chunks=[text]
-    return chunks
-
-#得到pretoken
-PAT = r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
-def pretokenize(chunk:str)->list[str]:
-    return [match.group(0) for match in re.finditer(PAT,chunk)]
-
-#pretoken计数
-def count_pretokens(text:str,special_tokens:list[str])->dict[tuple[bytes,...],int]:
-    chunks=remove_special(text,special_tokens)
-    counts:Counter[tuple[bytes,...]]=Counter()
-    for chunk in chunks:
-        pretokens=pretokenize(chunk)
-        for pretoken in pretokens:
-            byte_tokens=tuple(bytes([byte]) for byte in pretoken.encode("utf-8"))
-            counts[byte_tokens]+=1
-    return dict(counts)
-
-#计算pair数量
-def count_pairs(pretoken_counts:dict[tuple[bytes,...],int])->dict[tuple[bytes,bytes],int]:
-    counts:Counter[tuple[bytes,bytes]]=Counter()
-    for token,count in pretoken_counts.items():
-        for left,right in zip(token,token[1:]):
-            counts[(left,right)]+=count
-    return dict(counts)
-
-#对单个pretoken进行合并
-def merge_pair(token:tuple[bytes,...],pair:tuple[bytes,bytes])->tuple[bytes,...]:
-    result:list[bytes]=[]
-    index=0
-    while index<len(token):
-        if index+1<len(token) and token[index]==pair[0] and token[index+1]==pair[1]:
-            result.append(token[index]+token[index+1])
-            index+=2
-        else:
-            result.append(token[index])
-            index+=1
-    return tuple(result)
-
-#合并后的新计数
-def apply_merge(pretoken_counts:dict[tuple[bytes,...],int],pair:tuple[bytes,bytes]
-                )->dict[tuple[bytes,...],int]:
-    new_counts:Counter[tuple[bytes,...]]=Counter()
-    for token,count in pretoken_counts.items():
-        merged_token=merge_pair(token,pair)
-        new_counts[merged_token]+=count
-    return new_counts
-
-def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
-              )->tuple[dict[int,bytes],list[tuple[bytes,bytes]]]:
-    
-    with open(input_path,"r",encoding="utf-8") as file:
-        text=file.read()
-
-    pretoken_counts=count_pretokens(text,special_tokens)
-    vocab:dict[int,bytes]={index:bytes([index]) for index in range(256)}
-    for special_token in special_tokens:
-        vocab[len(vocab)]=special_token.encode("utf-8")
-    merges:list[tuple[bytes,bytes]]=[]
-
-    while len(vocab)<vocab_size:
-        pair_counts=count_pairs(pretoken_counts)
-        if not pair_counts:
-            break
-        best_pair=max(pair_counts,key=lambda pair:(pair_counts[pair],pair))
-        new_token=best_pair[0]+best_pair[1]
-        vocab[len(vocab)]=new_token
-        merges.append(best_pair)
-        pretoken_counts=apply_merge(pretoken_counts,best_pair)
-
-    return vocab,merges
-
-'''
