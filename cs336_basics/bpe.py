@@ -3,6 +3,7 @@ from collections import Counter,defaultdict
 import os
 import json
 import multiprocessing
+import time
 
 Token=tuple[bytes,...]
 Pair=tuple[bytes,bytes]
@@ -129,7 +130,11 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
 
     num_processes=8
     boundaries=find_chunk_boundaries(input_path,num_processes,b"<|endoftext|>")
+    pretokenization_start=time.perf_counter()
     pretoken_counts=parallel_count_pretokens(input_path,boundaries,special_tokens,num_processes)
+    pretokenization_end=time.perf_counter()
+
+    BPE_build_merge_start=time.perf_counter()
 
     sequences:list[Token]=list(pretoken_counts.keys())
     frequencies:list[int]=list(pretoken_counts.values())
@@ -186,5 +191,10 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
         new_token=best_pair[0]+best_pair[1]
         vocab[len(vocab)]=new_token
         merges.append(best_pair)
+
+    BPE_build_merge_end=time.perf_counter()
+
+    print(f"pretokenization time: {pretokenization_end - pretokenization_start:.2f} seconds")
+    print(f"BPE build merge time: {BPE_build_merge_end - BPE_build_merge_start:.2f} seconds")
 
     return vocab,merges
