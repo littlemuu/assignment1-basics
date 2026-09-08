@@ -4,6 +4,8 @@ import os
 import json
 import multiprocessing
 import time
+import heapq
+from dataclasses import dataclass
 
 Token=tuple[bytes,...]
 Pair=tuple[bytes,bytes]
@@ -125,10 +127,18 @@ def merge_pair(token:Token,pair:Pair)->Token:
     return tuple(result)
 
 
+@dataclass(slots=True)
+class HeapEntry:
+    pair:Pair
+    count_snapshot:int
+    #自定义less than
+    def __lt__(self,other):
+        return (self.count_snapshot,self.pair)>(other.count_snapshot,other.pair)
+
 def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
               )->tuple[dict[int,bytes],list[Pair]]:
 
-    num_processes=8
+    num_processes=16
 
     pretokenization_start=time.perf_counter()
 
@@ -148,10 +158,27 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
     merges:list[Pair]=[]
 
     pair_counts,pair_to_token_ids=build_pair_data(sequences,frequencies)
+    heap=[
+        HeapEntry(pair=pair,count_snapshot=count)
+        for pair,count in pair_counts.items()
+    ]
+    heapq.heapify(heap)
+
     while len(vocab)<vocab_size:
         if not pair_counts:
             break
-        best_pair=max(pair_counts,key=lambda pair:(pair_counts[pair],pair))
+
+        while heap:
+            entry=heapq.heappop(heap)
+            #lazy invalidation
+            if entry.pair not in pair_counts:
+                continue
+            if entry.count_snapshot!=pair_counts[entry.pair]:
+                continue
+            best_pair=entry.pair
+            break
+        else:
+            break
 
         affected_ids=list(pair_to_token_ids.get(best_pair,set()))
         touched_pairs:set[Pair]=set()
@@ -186,10 +213,14 @@ def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
                 pair_to_token_ids.setdefault(new_pair,set()).add(token_id)
 
         for pair in touched_pairs:
-            if pair_counts[pair]==0:
-                del pair_counts[pair]
-            elif pair_counts[pair]<0:
+            current_count=pair_counts[pair]
+            if current_count<0:
                 raise RuntimeError(f"pair count became negative:{pair}")
+            elif current_count==0:
+                del pair_counts[pair]
+            else:
+                new_entry=HeapEntry(pair=pair,count_snapshot=current_count)
+                heapq.heappush(heap,new_entry)
         
         new_token=best_pair[0]+best_pair[1]
         vocab[len(vocab)]=new_token
