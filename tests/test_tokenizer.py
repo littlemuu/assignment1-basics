@@ -462,3 +462,59 @@ def _encode(tokenizer, text):
     for just this function. We set the memory limit to 1MB.
     """
     return tokenizer.encode(text)
+
+
+def assert_encode_iterable_matches_encode(tokenizer, parts):
+    streamed_ids = list(tokenizer.encode_iterable(parts))
+    full_ids = tokenizer.encode("".join(parts))
+
+    assert streamed_ids == full_ids
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        ["I'v", "e"],
+        ["hello\n", "\nworld"],
+        ["hel", "lo world"],
+        ["hello ", "world"],
+        ["", "hello", ""],
+    ],
+)
+def test_encode_iterable_arbitrary_chunk_boundaries(parts):
+    tokenizer = get_tokenizer_from_vocab_merges_path(
+        vocab_path=VOCAB_PATH,
+        merges_path=MERGES_PATH,
+    )
+
+    assert_encode_iterable_matches_encode(tokenizer, parts)
+
+
+@pytest.mark.parametrize(
+    "special_tokens, parts",
+    [
+        (
+            ["<A>", "<A>BC"],
+            ["<A>B", "C"],
+        ),
+        (
+            ["x", "abxZ"],
+            ["abx", "Z"],
+        ),
+        (
+            ["<A>", "<A>BC"],
+            ["hello <A>", "BC world"],
+        ),
+    ],
+)
+def test_encode_iterable_special_token_chunk_boundaries(
+    special_tokens,
+    parts,
+):
+    tokenizer = get_tokenizer_from_vocab_merges_path(
+        vocab_path=VOCAB_PATH,
+        merges_path=MERGES_PATH,
+        special_tokens=special_tokens,
+    )
+
+    assert_encode_iterable_matches_encode(tokenizer, parts)
