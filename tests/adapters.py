@@ -16,6 +16,9 @@ from cs336_basics.model import (Linear,
                                 RotaryPositionalEmbedding,
                                 softmax,
                                 scaled_dot_product_attention,
+                                MultiHeadSelfAttention,
+                                TransformerBlock,
+                                TransformerLM,
                                 )
 
 
@@ -157,8 +160,14 @@ def run_multihead_self_attention(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
-
+    m_s_a=MultiHeadSelfAttention(d_model=d_model,num_heads=num_heads)
+    with torch.no_grad():
+        m_s_a.q_proj.weight.copy_(q_proj_weight)
+        m_s_a.k_proj.weight.copy_(k_proj_weight)
+        m_s_a.v_proj.weight.copy_(v_proj_weight)
+        m_s_a.output_proj.weight.copy_(o_proj_weight)
+    return m_s_a(in_features)
+    
 
 def run_multihead_self_attention_with_rope(
     d_model: int,
@@ -197,7 +206,18 @@ def run_multihead_self_attention_with_rope(
         Float[Tensor, " ... sequence_length d_model"]: Tensor with the output of running your optimized, batched multi-headed attention
         implementation with the given QKV projection weights and input features.
     """
-    raise NotImplementedError
+    m_s_a=MultiHeadSelfAttention(
+        d_model=d_model,
+        num_heads=num_heads,
+        max_seq_len=max_seq_len,
+        theta=theta,
+    )
+    with torch.no_grad():
+        m_s_a.q_proj.weight.copy_(q_proj_weight)
+        m_s_a.k_proj.weight.copy_(k_proj_weight)
+        m_s_a.v_proj.weight.copy_(v_proj_weight)
+        m_s_a.output_proj.weight.copy_(o_proj_weight)
+    return m_s_a(in_features,token_positions)
 
 
 def run_rope(
@@ -293,7 +313,48 @@ def run_transformer_block(
         Float[Tensor, "batch sequence_length d_model"] Tensor with the output of
         running the Transformer block on the input features while using RoPE.
     """
-    raise NotImplementedError
+    block = TransformerBlock(
+        d_model=d_model,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        theta=theta,
+        max_seq_len=max_seq_len,
+    )
+
+    with torch.no_grad():
+        block.attention.q_proj.weight.copy_(
+            weights["attn.q_proj.weight"]
+        )
+        block.attention.k_proj.weight.copy_(
+            weights["attn.k_proj.weight"]
+        )
+        block.attention.v_proj.weight.copy_(
+            weights["attn.v_proj.weight"]
+        )
+        block.attention.output_proj.weight.copy_(
+            weights["attn.output_proj.weight"]
+        )
+
+        block.ffn.w1.weight.copy_(
+            weights["ffn.w1.weight"]
+        )
+        block.ffn.w2.weight.copy_(
+            weights["ffn.w2.weight"]
+        )
+        block.ffn.w3.weight.copy_(
+            weights["ffn.w3.weight"]
+        )
+
+        block.norm1.gamma.copy_(weights["ln1.weight"])
+        block.norm2.gamma.copy_(weights["ln2.weight"])
+
+        seq_len = in_features.shape[-2]
+        token_positions = torch.arange(
+            seq_len,
+            device=in_features.device,
+        )
+
+    return block(in_features, token_positions)
 
 
 def run_transformer_lm(
@@ -375,7 +436,68 @@ def run_transformer_lm(
         Float[Tensor, "batch_size sequence_length vocab_size"]: Tensor with the predicted unnormalized
         next-word distribution for each token.
     """
-    raise NotImplementedError
+    lm = TransformerLM(
+        vocab_size=vocab_size,
+        context_length=context_length,
+        d_model=d_model,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        d_ff=d_ff,
+        theta=rope_theta,
+    )
+
+    with torch.no_grad():
+        lm.token_embeddings.weight.copy_(
+            weights["token_embeddings.weight"]
+        )
+
+        for i, layer in enumerate(lm.layers):
+            layer.attention.q_proj.weight.copy_(
+                weights[f"layers.{i}.attn.q_proj.weight"]
+            )
+
+            layer.attention.k_proj.weight.copy_(
+                weights[f"layers.{i}.attn.k_proj.weight"]
+            )
+
+            layer.attention.v_proj.weight.copy_(
+                weights[f"layers.{i}.attn.v_proj.weight"]
+            )
+
+            layer.attention.output_proj.weight.copy_(
+                weights[f"layers.{i}.attn.output_proj.weight"]
+            )
+
+            layer.norm1.gamma.copy_(
+                weights[f"layers.{i}.ln1.weight"]
+            )
+
+            layer.ffn.w1.weight.copy_(
+                weights[f"layers.{i}.ffn.w1.weight"]
+            )
+
+            layer.ffn.w2.weight.copy_(
+                weights[f"layers.{i}.ffn.w2.weight"]
+            )
+
+            layer.ffn.w3.weight.copy_(
+                weights[f"layers.{i}.ffn.w3.weight"]
+            )
+
+            layer.norm2.gamma.copy_(
+                weights[f"layers.{i}.ln2.weight"]
+            )
+
+        lm.final_norm.gamma.copy_(
+            weights["ln_final.weight"]
+        )
+
+        lm.lm_head.weight.copy_(
+            weights["lm_head.weight"]
+        )
+
+    return lm(in_indices)
+
 
 
 def run_rmsnorm(
