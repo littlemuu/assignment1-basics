@@ -138,7 +138,7 @@ class HeapEntry:
 def train_bpe(input_path,vocab_size:int,special_tokens:list[str]
               )->tuple[dict[int,bytes],list[Pair]]:
 
-    num_processes=16
+    num_processes=2
 
     pretokenization_start=time.perf_counter()
 
